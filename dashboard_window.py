@@ -21,6 +21,7 @@ from PyQt6.QtGui import QFont
 import config
 from data_processor import DataProcessor
 from mock_generator import MockDataGenerator
+from serial_reader import SerialReader
 from widgets.metric_panel import MetricPanel
 from widgets.plot_panel import PlotPanel
 from widgets.orientation_view import OrientationView
@@ -112,7 +113,11 @@ class DashboardWindow(QMainWindow):
         # ── Data pipeline ─────────────────────────────────────────────────────
         self._data_queue = queue.Queue(maxsize=500)
 
-        self._generator = MockDataGenerator(self._data_queue)
+        if config.MOCK_MODE:
+            self._generator = MockDataGenerator(self._data_queue)
+        else:
+            self._generator = SerialReader(self._data_queue)
+
         self._processor = DataProcessor(self._data_queue)
         self._processor.processed_data.connect(self._on_data)
 

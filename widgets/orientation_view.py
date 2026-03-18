@@ -8,7 +8,8 @@
 import math
 import numpy as np
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QOpenGLWidget
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
+from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QSurfaceFormat
 

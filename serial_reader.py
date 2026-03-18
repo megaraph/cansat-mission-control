@@ -3,6 +3,8 @@
 #  Reads raw lines from the HC-12 serial port,
 #  validates format, and pushes parsed dicts
 #  into the shared data queue.
+#  Also emits line_received signal for the
+#  live serial monitor debug panel.
 # ─────────────────────────────────────────────
 
 import queue
@@ -12,29 +14,28 @@ import platform
 
 import serial
 import serial.tools.list_ports
+from PyQt6.QtCore import QObject, pyqtSignal
 
 import config
 
 # Expected number of whitespace-delimited fields in a valid packet
-EXPECTED_FIELDS = 15
+EXPECTED_FIELDS = (15, 16)
 
 
 def _detect_port() -> str:
     """Auto-detect the most likely HC-12 / USB-TTL port."""
     ports = list(serial.tools.list_ports.comports())
-    # Common USB-TTL chip descriptions
-    keywords = ["usbserial", "usbmodem", "ch340", "cp210", "ftdi", "uart", "com"]
+    keywords = ["usbserial", "usbmodem", "ch340", "cp210", "ftdi", "uart"]
     for p in ports:
         desc = (p.description + p.device).lower()
         if any(k in desc for k in keywords):
             return p.device
-    # Fallback to config defaults
     if platform.system() == "Windows":
         return config.SERIAL_PORT_WINDOWS
     return config.SERIAL_PORT_MAC
 
 
-def _is_valid_line(fields: list[str]) -> bool:
+def _is_valid_line(fields: list) -> bool:
     """
     Validate that a split line matches the expected CanSat packet schema:
 
@@ -43,32 +44,28 @@ def _is_valid_line(fields: list[str]) -> bool:
 
     Rules:
     - Exactly 15 fields
-    - Fields 0–6, 8–14 must be numeric (float or int)
-    - Field 7 must match D/M/YYYY or D/M/0 (GPS date, may be 0/0/0)
-    - Pressure in plausible range (80000–110000 Pa)
-    - Timestamp must be a non-negative integer
+    - Fields 0-6, 8-14 must be numeric
+    - Field 7 must have two '/' separators (date)
+    - Pressure in plausible range (80000-110000 Pa)
+    - Timestamp must be non-negative
     """
-    if len(fields) != EXPECTED_FIELDS:
+    if len(fields) not in EXPECTED_FIELDS:
         return False
 
     try:
-        # Numeric fields: all except index 7 (date)
         numeric_indices = list(range(0, 7)) + list(range(8, 15))
         values = {}
         for i in numeric_indices:
             values[i] = float(fields[i])
 
-        # Date field: must contain two '/' separators
         date_parts = fields[7].split("/")
         if len(date_parts) != 3:
             return False
 
-        # Pressure sanity check (80–110 kPa covers sea level to ~2000m)
         pressure = values[0]
         if not (80000 <= pressure <= 110000):
             return False
 
-        # Timestamp must be non-negative
         if values[14] < 0:
             return False
 
@@ -78,7 +75,7 @@ def _is_valid_line(fields: list[str]) -> bool:
         return False
 
 
-def _parse_line(fields: list[str]) -> dict:
+def _parse_line(fields: list) -> dict:
     """Convert validated field list into a typed packet dict."""
     return {
         "phase": "LIVE",
@@ -100,15 +97,25 @@ def _parse_line(fields: list[str]) -> dict:
     }
 
 
+class _Signaller(QObject):
+    """Carries Qt signal for cross-thread serial monitor updates."""
+
+    line_received = pyqtSignal(str, bool, list)
+
+
 class SerialReader(threading.Thread):
     """
     Background thread that reads from the serial port and pushes
     validated packets into out_queue.
 
     Gracefully handles:
-    - Port not found / device unplugged  → retries every 3 seconds
-    - Malformed / non-data lines         → silently skipped
-    - Encoding errors                    → line dropped
+    - Port not found / device unplugged  -> retries every 3 seconds
+    - Malformed / non-data lines         -> silently skipped
+    - Encoding errors                    -> line dropped
+
+    Every received line (valid or not) is also emitted via
+    signaller.line_received(raw_line, valid, fields) so the
+    SerialMonitor debug widget can display it live.
     """
 
     def __init__(self, out_queue: queue.Queue, port: str = None):
@@ -116,8 +123,8 @@ class SerialReader(threading.Thread):
         self.out_queue = out_queue
         self.port = port or _detect_port()
         self._stop_event = threading.Event()
+        self.signaller = _Signaller()  # connect to SerialMonitor.append_raw
 
-        # Public status — read by the UI
         self.connected = False
         self.bad_lines = 0
         self.good_lines = 0
@@ -133,7 +140,6 @@ class SerialReader(threading.Thread):
             except serial.SerialException as e:
                 self.connected = False
                 self.last_error = str(e)
-                # Wait before retrying so we don't spam error logs
                 self._stop_event.wait(timeout=3.0)
             except Exception as e:
                 self.connected = False
@@ -141,7 +147,10 @@ class SerialReader(threading.Thread):
                 self._stop_event.wait(timeout=3.0)
 
     def _connect_and_read(self):
-        print(f"[SerialReader] Connecting to {self.port} @ {config.SERIAL_BAUD} baud…")
+        print(f"[SerialReader] Attempting: {self.port}")
+        print(
+            f"[SerialReader] Connecting to {self.port} @ {config.SERIAL_BAUD} baud..."
+        )
 
         with serial.Serial(
             port=self.port,
@@ -156,19 +165,20 @@ class SerialReader(threading.Thread):
                 try:
                     raw = ser.readline()
                     if not raw:
-                        continue  # timeout — no data, loop again
+                        continue
 
                     line = raw.decode("utf-8", errors="ignore").strip()
-
                     if not line:
-                        continue  # blank line
+                        continue
 
                     fields = line.split()
+                    valid = _is_valid_line(fields)
 
-                    if not _is_valid_line(fields):
+                    # Always emit to serial monitor (valid or not)
+                    self.signaller.line_received.emit(line, valid, fields)
+
+                    if not valid:
                         self.bad_lines += 1
-                        # Uncomment for debug:
-                        # print(f"[SerialReader] Skipped: {line!r}")
                         continue
 
                     packet = _parse_line(fields)
@@ -177,8 +187,8 @@ class SerialReader(threading.Thread):
                     try:
                         self.out_queue.put_nowait(packet)
                     except queue.Full:
-                        pass  # drop oldest implicitly; never block serial thread
+                        pass
 
                 except serial.SerialException:
                     self.connected = False
-                    raise  # bubble up to reconnect loop
+                    raise

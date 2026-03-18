@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 import config
+from widgets.serial_monitor import SerialMonitor
 
 # ── Global PyQtGraph config ───────────────────────────────────────────────────
 pg.setConfigOptions(antialias=True, foreground=config.COLOR_TEXT_DIM)
@@ -96,6 +97,10 @@ class IMUTab(QWidget):
             )
         )
 
+    @property
+    def serial_monitor(self) -> SerialMonitor:
+        return self._monitor_tab
+
     def update(self, data: dict):
         t = data["plot_time"]
         self._c_ax.setData(t, data["plot_ax"])
@@ -145,6 +150,10 @@ class EnvironmentTab(QWidget):
         self._c_press = _curve(self._plt_press, config.COLOR_PLOT_PRESS, width=1.5)
 
         layout.addWidget(self._plt_press)
+
+    @property
+    def serial_monitor(self) -> SerialMonitor:
+        return self._monitor_tab
 
     def update(self, data: dict):
         t = data["plot_time"]
@@ -267,6 +276,10 @@ class GPSTab(QWidget):
 
         layout.addStretch()
 
+    @property
+    def serial_monitor(self) -> SerialMonitor:
+        return self._monitor_tab
+
     def update(self, data: dict):
         lat = data.get("latitude", 0.0)
         lon = data.get("longitude", 0.0)
@@ -303,11 +316,18 @@ class PlotPanel(QWidget):
         self._env_tab = EnvironmentTab()
         self._gps_tab = GPSTab()
 
+        self._monitor_tab = SerialMonitor()
+
         self._tabs.addTab(self._imu_tab, "IMU")
         self._tabs.addTab(self._env_tab, "ENVIRONMENT")
         self._tabs.addTab(self._gps_tab, "GPS")
+        self._tabs.addTab(self._monitor_tab, "SERIAL")
 
         layout.addWidget(self._tabs)
+
+    @property
+    def serial_monitor(self) -> SerialMonitor:
+        return self._monitor_tab
 
     def update(self, data: dict):
         idx = self._tabs.currentIndex()

@@ -56,7 +56,7 @@ class HeaderBar(QWidget):
         layout.setSpacing(20)
 
         # Mission title
-        title = QLabel("CANSAT  ·  GROUND STATION  ·  DLSU")
+        title = QLabel("CANSAT  ·  GROUND STATION  ·  DLSU ARCHERNAUTS 2026")
         font = QFont("JetBrains Mono, Courier New, monospace")
         font.setPixelSize(13)
         font.setWeight(QFont.Weight.Bold)
